@@ -16,6 +16,7 @@ from ..domain.models import (
     MaterialVersion,
     Objection,
     PackageEntry,
+    PackageMerge,
     ReviewPackage,
     ReviewRequest,
     User,
@@ -115,6 +116,30 @@ class Repository(abc.ABC):
         **fields,
     ) -> bool:
         """条件更新；状态不再是 expected_status 时返回 False（并发冲突）。"""
+
+    # ---- 复核案件合并 ----
+    @abc.abstractmethod
+    def insert_merge(self, merge: PackageMerge) -> None:
+        """追加合并事件与原案成员（原案行本身不动）。"""
+
+    @abc.abstractmethod
+    def find_merge_by_group_key(self, group_key: str) -> PackageMerge | None:
+        """按原案集合的规范化键查找：重复合并请求据此回放既有主案。"""
+
+    @abc.abstractmethod
+    def find_merge_by_source(self, source_package_id: str) -> PackageMerge | None:
+        """该原案是否已并入某个主案。"""
+
+    @abc.abstractmethod
+    def find_merge_by_primary(self, primary_package_id: str) -> PackageMerge | None:
+        """该包是否为某次合并的主案。"""
+
+    @abc.abstractmethod
+    def get_merge(self, merge_id: str) -> PackageMerge | None: ...
+
+    @abc.abstractmethod
+    def resolve_package_id(self, package_id: str) -> str:
+        """旧编号跳转：若该编号是已合并原案，返回主案编号；否则原样返回。"""
 
     # ---- 评审请求 ----
     @abc.abstractmethod

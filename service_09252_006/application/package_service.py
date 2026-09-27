@@ -283,6 +283,18 @@ class PackageService(Service):
         view["entries"] = visible_entries
         view["redacted_entries"] = hidden_count
         view["viewer"] = actor.user_id
+        # 合并前的链接仍能跳转：原案视图给出主案跳转目标，主案视图给出原案清单
+        merged_into = self.repo.find_merge_by_source(package_id)
+        if merged_into is not None:
+            view["merged_into"] = {
+                "merge_id": merged_into.merge_id,
+                "primary_package_id": merged_into.primary_package_id,
+                "primary_url": f"/v1/packages/{merged_into.primary_package_id}",
+            }
+        merged_from = self.repo.find_merge_by_primary(package_id)
+        if merged_from is not None:
+            view["merge_id"] = merged_from.merge_id
+            view["merged_from"] = list(merged_from.source_package_ids)
         return view
 
     def download_entry(

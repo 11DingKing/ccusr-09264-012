@@ -394,6 +394,27 @@ class ApiHandler(BaseHTTPRequestHandler):
             ),
         )
 
+    # ----------------------------------------------------------- 合并
+    def create_merge(self) -> None:
+        actor = self._actor()
+        body = self._read_json()
+        result = self.services.merges.merge_packages(
+            actor,
+            source_package_ids=body.get("source_package_ids") or [],
+            title=body.get("title"),
+            reason=body.get("reason", ""),
+            idempotency_key=self._idempotency_key(),
+        )
+        self._send_json(201, result)
+
+    def get_merge(self, merge_id: str) -> None:
+        actor = self._actor()
+        self._send_json(200, self.services.merges.get_merge(actor, merge_id))
+
+    def get_package_merge(self, package_id: str) -> None:
+        actor = self._actor()
+        self._send_json(200, self.services.merges.build_merge_view(actor, package_id))
+
 
 # 路由表：方法 -> [(路径模式, 处理方法名)]
 def _routes() -> dict[str, list[tuple[str, str]]]:
@@ -413,6 +434,7 @@ def _routes() -> dict[str, list[tuple[str, str]]]:
         ("/v1/requests/{request_id}/respond", "respond_request"),
         ("/v1/requests/{request_id}/objections", "create_objection"),
         ("/v1/requests/{request_id}/verdict", "submit_verdict"),
+        ("/v1/merges", "create_merge"),
     ]
     get = [
         ("/v1/materials/{material_id}", "get_material"),
@@ -420,6 +442,8 @@ def _routes() -> dict[str, list[tuple[str, str]]]:
         ("/v1/packages", "list_packages"),
         ("/v1/packages/{package_id}", "get_package"),
         ("/v1/packages/{package_id}/requests", "list_requests"),
+        ("/v1/packages/{package_id}/merge", "get_package_merge"),
+        ("/v1/merges/{merge_id}", "get_merge"),
         (
             "/v1/packages/{package_id}/entries/{version_id}/content",
             "download_entry",

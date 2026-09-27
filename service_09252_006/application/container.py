@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from ..application.evidence_service import EvidenceService
+from ..application.merge_service import MergeService
 from ..application.package_service import PackageService
 from ..application.review_service import ReviewService
 from ..application.ports import Clock, IdGenerator, SystemClock, Uuid4IdGenerator
@@ -24,6 +25,7 @@ class ApplicationContext:
         self.evidence = EvidenceService(self.repo, self.clock, self.ids)
         self.packages = PackageService(self.repo, self.clock, self.ids)
         self.reviews = ReviewService(self.repo, self.clock, self.ids)
+        self.merges = MergeService(self.repo, self.clock, self.ids)
 
     def close(self) -> None:
         self.repo.close()

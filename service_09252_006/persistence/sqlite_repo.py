@@ -22,12 +22,13 @@ from ..domain.models import (
     MaterialVersion,
     Objection,
     PackageEntry,
+    PackageMerge,
     ReviewPackage,
     ReviewRequest,
     User,
 )
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 
 class SqliteRepository(Repository):
@@ -49,8 +50,12 @@ class SqliteRepository(Repository):
     # ---------------------------------------------------------------- schema
     def _ensure_schema(self) -> None:
         version = self._conn.execute("PRAGMA user_version").fetchone()[0]
-        if version >= SCHEMA_VERSION:
-            return
+        if version < 1:
+            self._migrate_v1()
+        if version < 2:
+            self._migrate_v2()
+
+    def _migrate_v1(self) -> None:
         # executescript 会自行提交事务；把 user_version 写入放在同一脚本
         self._conn.executescript(
             """
@@ -177,6 +182,37 @@ class SqliteRepository(Repository):
                 );
 
                 PRAGMA user_version = 1;
+            """
+        )
+
+    def _migrate_v2(self) -> None:
+        # 复核案件合并：合并事件 + 原案成员关系。原案在 packages 表中的行
+        # 保持不动（原案索引保留），只靠成员表把旧编号映射到主案。
+        self._conn.executescript(
+            """
+                CREATE TABLE IF NOT EXISTS package_merges (
+                    merge_id           TEXT PRIMARY KEY,
+                    group_key          TEXT NOT NULL UNIQUE,
+                    primary_package_id TEXT NOT NULL UNIQUE
+                        REFERENCES packages(package_id),
+                    institution_id     TEXT NOT NULL,
+                    reason             TEXT NOT NULL,
+                    created_by         TEXT NOT NULL,
+                    created_at         TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS package_merge_members (
+                    merge_id          TEXT NOT NULL
+                        REFERENCES package_merges(merge_id),
+                    source_package_id TEXT NOT NULL
+                        REFERENCES packages(package_id),
+                    PRIMARY KEY (merge_id, source_package_id)
+                );
+                -- 一个原案只能并入一个主案，保证旧编号跳转无歧义
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_merge_members_source
+                    ON package_merge_members(source_package_id);
+
+                PRAGMA user_version = 2;
             """
         )
 
@@ -512,6 +548,78 @@ class SqliteRepository(Repository):
             params,
         )
         return cur.rowcount == 1
+
+    # ---------------------------------------------------------------- merges
+    def insert_merge(self, merge: PackageMerge) -> None:
+        self._conn.execute(
+            "INSERT INTO package_merges(merge_id, group_key, primary_package_id,"
+            " institution_id, reason, created_by, created_at)"
+            " VALUES(?,?,?,?,?,?,?)",
+            (
+                merge.merge_id,
+                merge.group_key,
+                merge.primary_package_id,
+                merge.institution_id,
+                merge.reason,
+                merge.created_by,
+                merge.created_at,
+            ),
+        )
+        for source_id in merge.source_package_ids:
+            self._conn.execute(
+                "INSERT INTO package_merge_members(merge_id, source_package_id)"
+                " VALUES(?,?)",
+                (merge.merge_id, source_id),
+            )
+
+    def _row_to_merge(self, row: sqlite3.Row) -> PackageMerge:
+        members = self._conn.execute(
+            "SELECT source_package_id FROM package_merge_members"
+            " WHERE merge_id = ? ORDER BY source_package_id",
+            (row["merge_id"],),
+        ).fetchall()
+        return PackageMerge(
+            merge_id=row["merge_id"],
+            group_key=row["group_key"],
+            primary_package_id=row["primary_package_id"],
+            institution_id=row["institution_id"],
+            reason=row["reason"],
+            created_by=row["created_by"],
+            created_at=row["created_at"],
+            source_package_ids=tuple(r["source_package_id"] for r in members),
+        )
+
+    def find_merge_by_group_key(self, group_key: str) -> PackageMerge | None:
+        row = self._conn.execute(
+            "SELECT * FROM package_merges WHERE group_key = ?", (group_key,)
+        ).fetchone()
+        return None if row is None else self._row_to_merge(row)
+
+    def find_merge_by_source(self, source_package_id: str) -> PackageMerge | None:
+        row = self._conn.execute(
+            "SELECT m.* FROM package_merges m"
+            " JOIN package_merge_members mm ON mm.merge_id = m.merge_id"
+            " WHERE mm.source_package_id = ?",
+            (source_package_id,),
+        ).fetchone()
+        return None if row is None else self._row_to_merge(row)
+
+    def find_merge_by_primary(self, primary_package_id: str) -> PackageMerge | None:
+        row = self._conn.execute(
+            "SELECT * FROM package_merges WHERE primary_package_id = ?",
+            (primary_package_id,),
+        ).fetchone()
+        return None if row is None else self._row_to_merge(row)
+
+    def get_merge(self, merge_id: str) -> PackageMerge | None:
+        row = self._conn.execute(
+            "SELECT * FROM package_merges WHERE merge_id = ?", (merge_id,)
+        ).fetchone()
+        return None if row is None else self._row_to_merge(row)
+
+    def resolve_package_id(self, package_id: str) -> str:
+        merge = self.find_merge_by_source(package_id)
+        return merge.primary_package_id if merge is not None else package_id
 
     # --------------------------------------------------------------- requests
     def insert_request(self, request: ReviewRequest) -> None:

@@ -99,6 +99,24 @@ class ReviewPackage:
 
 
 @dataclass
+class PackageMerge:
+    """复核案件合并事件：若干原案并入一个新主案。
+
+    原案行与条目保持不动（编号与独立证据均保留），合并关系只追加：
+    source_package_ids 中的每个原案编号都可经仓库跳转到主案。
+    """
+
+    merge_id: str
+    group_key: str                 # 原案集合的规范化键：重复合并据此回放
+    primary_package_id: str        # 主案（合并生成的新评审包）
+    institution_id: str
+    reason: str
+    created_by: str
+    created_at: str
+    source_package_ids: tuple[str, ...] = ()
+
+
+@dataclass
 class ReviewRequest:
     request_id: str
     package_id: str
