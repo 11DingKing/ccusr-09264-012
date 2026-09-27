@@ -1,6 +1,7 @@
 """应用装配：把仓库、端口与各服务组合成一个 ApplicationContext。"""
 from __future__ import annotations
 
+from ..application.case_merge_service import CaseMergeService
 from ..application.evidence_service import EvidenceService
 from ..application.package_service import PackageService
 from ..application.review_service import ReviewService
@@ -24,6 +25,7 @@ class ApplicationContext:
         self.evidence = EvidenceService(self.repo, self.clock, self.ids)
         self.packages = PackageService(self.repo, self.clock, self.ids)
         self.reviews = ReviewService(self.repo, self.clock, self.ids)
+        self.merges = CaseMergeService(self.repo, self.clock, self.ids)
 
     def close(self) -> None:
         self.repo.close()

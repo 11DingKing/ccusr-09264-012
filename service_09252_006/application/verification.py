@@ -155,7 +155,13 @@ def _verify_packages(conn: sqlite3.Connection, report: VerificationReport) -> No
                     sha256=entry["sha256"],
                 )
 
-        if pkg["status"] in ("sealed", "under_review", "decided"):
+        # merged：原案并入主案后只读保留。凡合并前已固定的指纹
+        # （封存清单/评审记录）仍须可重算；合并前还是 draft 的原案
+        # 本就没有指纹，与 draft 包一样不参与指纹核验。
+        was_sealed = pkg["status"] in ("sealed", "under_review", "decided") or (
+            pkg["status"] == "merged" and pkg["manifest_fingerprint"] is not None
+        )
+        if was_sealed:
             report.sealed_count += 1
             expected = manifest_fingerprint(
                 pkg["package_id"],
@@ -197,7 +203,10 @@ def _verify_packages(conn: sqlite3.Connection, report: VerificationReport) -> No
                         version_id=e["version_id"],
                     )
 
-        if pkg["status"] == "decided":
+        was_decided = pkg["status"] == "decided" or (
+            pkg["status"] == "merged" and pkg["review_fingerprint"] is not None
+        )
+        if was_decided:
             report.decided_count += 1
             requests = [
                 {

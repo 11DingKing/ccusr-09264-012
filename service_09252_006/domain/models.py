@@ -136,6 +136,24 @@ class Blob:
 
 
 @dataclass
+class CaseMerge:
+    """一次复核案件合并：若干原案（source）并入一个主案（master）。
+
+    合并只追加关系记录，不删除/改写任何原案与其证据条目；
+    source_key 是原案编号集合的规范化形式，用于识别“同一个合并请求”。
+    """
+
+    merge_id: str
+    master_package_id: str
+    institution_id: str
+    source_package_ids: tuple[str, ...]  # 排序后的原案编号（含去重）
+    source_key: str
+    note: str
+    created_by: str
+    created_at: str
+
+
+@dataclass
 class AuditEntry:
     audit_id: str
     package_id: Optional[str]

@@ -197,6 +197,74 @@ class HttpApiTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertTrue(body["ok"])
 
+    def test_case_merge_over_http(self) -> None:
+        admin = self._create_user(
+            "admin-a", ["institution_admin"], "inst-a", "tok-admin"
+        )
+
+        # 建两个封存案件
+        pids = []
+        for i in (1, 2):
+            status, mat = admin.request(
+                "POST", "/v1/materials",
+                {"kind": "syllabus", "title": f"大纲{i}"},
+            )
+            self.assertEqual(status, 201)
+            status, ver = admin.request(
+                "POST", f"/v1/materials/{mat['material_id']}/versions",
+                {"content_base64": base64.b64encode(f"大纲 v{i}".encode()).decode("ascii")},
+            )
+            self.assertEqual(status, 201)
+            status, pkg = admin.request("POST", "/v1/packages", {"title": f"案件{i}"})
+            pid = pkg["package_id"]
+            status, _ = admin.request(
+                "POST", f"/v1/packages/{pid}/entries",
+                {"version_id": ver["version_id"]},
+            )
+            self.assertEqual(status, 201)
+            status, _ = admin.request("POST", f"/v1/packages/{pid}/seal", {})
+            self.assertEqual(status, 200)
+            pids.append(pid)
+
+        # 合并
+        status, merge = admin.request(
+            "POST", "/v1/case-merges",
+            {"source_package_ids": pids, "note": "法务并案"},
+        )
+        self.assertEqual(status, 201, merge)
+        master_id = merge["master_package_id"]
+        self.assertFalse(merge["replayed"])
+
+        # 重复合并（顺序颠倒）：回放同一主案，不生成新主案
+        status, again = admin.request(
+            "POST", "/v1/case-merges",
+            {"source_package_ids": list(reversed(pids))},
+        )
+        self.assertEqual(status, 201)
+        self.assertTrue(again["replayed"])
+        self.assertEqual(again["master_package_id"], master_id)
+
+        # 旧编号跳转
+        status, resolved = admin.request("GET", f"/v1/packages/{pids[0]}/resolve")
+        self.assertEqual(status, 200)
+        self.assertTrue(resolved["merged"])
+        self.assertEqual(resolved["master_package_id"], master_id)
+
+        # 原案视图保留独立证据并指向主案
+        status, view = admin.request("GET", f"/v1/packages/{pids[0]}")
+        self.assertEqual(status, 200)
+        self.assertEqual(view["status"], "merged")
+        self.assertEqual(view["merged_into"], master_id)
+        self.assertEqual(len(view["entries"]), 1)
+
+        # 合并记录可查
+        status, merges = admin.request("GET", "/v1/case-merges")
+        self.assertEqual(status, 200)
+        self.assertEqual(len(merges["merges"]), 1)
+        status, one = admin.request("GET", f"/v1/case-merges/{merge['merge_id']}")
+        self.assertEqual(status, 200)
+        self.assertEqual(one["master_package_id"], master_id)
+
 
 if __name__ == "__main__":
     unittest.main()

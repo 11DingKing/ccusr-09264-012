@@ -25,6 +25,20 @@
 - 后补材料走“复审包”：`supersedes_package_id` 指向旧包；旧包中**未撤回**
   的条目自动带入，已撤回条目不复制；旧包仅在 `decided` 后允许派生复审。
 
+### 复核案件合并
+- 法务要求的并案：多个原案并入一个新主案（draft 评审包，复制各原案中
+  未撤回的条目，多案引用同一版本只留一条），随后走正常封存/评审/签发。
+- **原案保留**：原案编号不回收、条目与封存/评审指纹不改写，仅追加
+  `merged` 只读标记；合并关系只追加 `case_merges` / `merge_members`
+  关系记录，原案索引（`merge_members.source_package_id`）保留。
+- **旧链接跳转**：`GET /v1/packages/{旧编号}` 仍返回原案视图（含独立
+  证据）并给出 `merged_into` 主案编号；`GET /v1/packages/{id}/resolve`
+  与 Python 侧 `repo.resolve_package_id` / `merges.resolve_case_number`
+  可从旧编号跳到主案。
+- **重复合并不制造新主案**：同一组原案编号（与顺序、重复、重试无关）
+  规范化为 `source_key` 并加唯一约束，重复请求回放既有主案；任一原案
+  已并入其他主案时返回 `409 conflict`，绝不另起新主案。
+
 ### 材料撤回
 - 版本/材料撤回是追加标记，不删除任何已封存引用（历史可证）。
 - 撤回的版本不能进入新包、不能被复审包复制；离线核验会把
@@ -106,6 +120,10 @@ python3 -m service_09252_006.cli verify --db ./data/qe.db [--json]
 | POST | `/v1/requests/{id}/verdict` | 提交 approve/object（object 须先有异议） |
 | POST | `/v1/requests/{id}/cancel` | 取消分配（即时收回敏感访问权） |
 | POST | `/v1/packages/{id}/decision` | 签发 approved/needs_revision/rejected |
+| POST | `/v1/case-merges` | 复核案件合并（`source_package_ids`，幂等回放同一主案） |
+| GET  | `/v1/case-merges` | 合并记录列表（按机构/角色过滤） |
+| GET  | `/v1/case-merges/{id}` | 合并记录详情 |
+| GET  | `/v1/packages/{id}/resolve` | 旧编号跳转：原案编号 → 主案编号 |
 
 评审状态机：`draft → sealed → under_review → decided`；复审包重新走一遍，
 旧包不复活。
@@ -120,7 +138,8 @@ python3 -m compileall -q service_09252_006 tests
 覆盖：内容寻址与版本链、封存不变量、**材料撤回**（封存前后）、后补材料
 只能复审、**最小披露与权限变化**（取消/拒绝/角色调整/跨机构）、
 **跨时区截止**（上海/伦敦/洛杉矶）、异议与签发约束、幂等重放与失败重试、
-多连接**并发复审**、离线核验对字节/清单/评审篡改的检出，以及完整 HTTP
+多连接**并发复审**、**复核案件合并**（原案保留、旧编号跳转、重复/并发
+合并不生成新主案）、离线核验对字节/清单/评审篡改的检出，以及完整 HTTP
 端到端流程。
 
 扩展模块覆盖证据、审批、权限、留存、对账与恢复等业务边界。

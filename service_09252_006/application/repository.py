@@ -12,6 +12,7 @@ from contextlib import AbstractContextManager
 from ..domain.models import (
     AuditEntry,
     Blob,
+    CaseMerge,
     Material,
     MaterialVersion,
     Objection,
@@ -115,6 +116,43 @@ class Repository(abc.ABC):
         **fields,
     ) -> bool:
         """条件更新；状态不再是 expected_status 时返回 False（并发冲突）。"""
+
+    # ---- 复核案件合并 ----
+    @abc.abstractmethod
+    def insert_merge(self, merge: CaseMerge) -> None: ...
+
+    @abc.abstractmethod
+    def get_merge_by_key(self, source_key: str) -> CaseMerge | None:
+        """按规范化原案集合键取合并记录（重复请求识别用）。"""
+
+    @abc.abstractmethod
+    def get_merge_by_master(self, master_package_id: str) -> CaseMerge | None: ...
+
+    @abc.abstractmethod
+    def get_merge(self, merge_id: str) -> CaseMerge | None: ...
+
+    @abc.abstractmethod
+    def list_merges(
+        self, institution_id: str | None = None
+    ) -> list[CaseMerge]: ...
+
+    @abc.abstractmethod
+    def resolve_package_id(self, package_id: str) -> str:
+        """旧编号跳转：原案编号解析为其主案编号；非原案原样返回。"""
+
+    @abc.abstractmethod
+    def get_package_effective(self, package_id: str) -> ReviewPackage | None:
+        """先按合并索引解析旧编号，再取包（旧链接跳到主案）。"""
+
+    @abc.abstractmethod
+    def list_merge_members(self, master_package_id: str) -> list[ReviewPackage]:
+        """主案名下的全部原案包（保留独立编号与独立证据）。"""
+
+    @abc.abstractmethod
+    def mark_packages_merged(
+        self, master_package_id: str, source_ids: list[str]
+    ) -> None:
+        """把一批原案标记为 merged（不经状态机字段更新的批量标记）。"""
 
     # ---- 评审请求 ----
     @abc.abstractmethod

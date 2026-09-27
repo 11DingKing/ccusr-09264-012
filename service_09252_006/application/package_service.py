@@ -283,6 +283,20 @@ class PackageService(Service):
         view["entries"] = visible_entries
         view["redacted_entries"] = hidden_count
         view["viewer"] = actor.user_id
+        # 复核案件合并：原案视图保留独立证据并给出主案跳转；
+        # 主案视图列出全部原案编号（各原案编号不回收）
+        merged_into = self.repo.resolve_package_id(package_id)
+        view["merged_into"] = merged_into if merged_into != package_id else None
+        merge = self.repo.get_merge_by_master(package_id)
+        view["merge"] = (
+            {
+                "merge_id": merge.merge_id,
+                "source_package_ids": list(merge.source_package_ids),
+                "created_at": merge.created_at,
+            }
+            if merge is not None
+            else None
+        )
         return view
 
     def download_entry(

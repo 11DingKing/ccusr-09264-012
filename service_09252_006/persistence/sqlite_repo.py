@@ -14,10 +14,12 @@ import sqlite3
 from typing import Iterator
 
 from ..application.repository import Repository
+from ..domain.enums import PackageStatus
 from ..domain.fingerprint import digest_bytes
 from ..domain.models import (
     AuditEntry,
     Blob,
+    CaseMerge,
     Material,
     MaterialVersion,
     Objection,
@@ -27,7 +29,7 @@ from ..domain.models import (
     User,
 )
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 
 class SqliteRepository(Repository):
@@ -49,11 +51,10 @@ class SqliteRepository(Repository):
     # ---------------------------------------------------------------- schema
     def _ensure_schema(self) -> None:
         version = self._conn.execute("PRAGMA user_version").fetchone()[0]
-        if version >= SCHEMA_VERSION:
-            return
-        # executescript 会自行提交事务；把 user_version 写入放在同一脚本
-        self._conn.executescript(
-            """
+        if version < 1:
+            # executescript 会自行提交事务；把 user_version 写入放在同一脚本
+            self._conn.executescript(
+                """
                 CREATE TABLE IF NOT EXISTS users (
                     user_id        TEXT PRIMARY KEY,
                     institution_id TEXT,
@@ -178,7 +179,36 @@ class SqliteRepository(Repository):
 
                 PRAGMA user_version = 1;
             """
-        )
+            )
+        if version < 2:
+            # 复核案件合并：只追加关系记录，不改动原案与证据。
+            # case_merges.source_key 唯一 => 重复合并请求回放同一主案；
+            # merge_members 保留每个原案编号的独立索引 => 旧链接可跳转。
+            self._conn.executescript(
+                """
+                CREATE TABLE IF NOT EXISTS case_merges (
+                    merge_id           TEXT PRIMARY KEY,
+                    master_package_id  TEXT NOT NULL,
+                    institution_id     TEXT NOT NULL,
+                    source_ids_json    TEXT NOT NULL,
+                    source_key         TEXT NOT NULL UNIQUE,
+                    note               TEXT NOT NULL DEFAULT '',
+                    created_by         TEXT NOT NULL,
+                    created_at         TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS merge_members (
+                    source_package_id  TEXT PRIMARY KEY,
+                    master_package_id  TEXT NOT NULL,
+                    merge_id           TEXT NOT NULL,
+                    merged_at          TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_merge_members_master
+                    ON merge_members(master_package_id);
+
+                PRAGMA user_version = 2;
+            """
+            )
 
     @contextlib.contextmanager
     def _txn_direct(self) -> Iterator[None]:
@@ -512,6 +542,108 @@ class SqliteRepository(Repository):
             params,
         )
         return cur.rowcount == 1
+
+    # ----------------------------------------------------------------- merges
+    def insert_merge(self, merge: CaseMerge) -> None:
+        self._conn.execute(
+            "INSERT INTO case_merges(merge_id, master_package_id, institution_id,"
+            " source_ids_json, source_key, note, created_by, created_at)"
+            " VALUES(?,?,?,?,?,?,?,?)",
+            (
+                merge.merge_id,
+                merge.master_package_id,
+                merge.institution_id,
+                json.dumps(list(merge.source_package_ids), ensure_ascii=False),
+                merge.source_key,
+                merge.note,
+                merge.created_by,
+                merge.created_at,
+            ),
+        )
+        for source_id in merge.source_package_ids:
+            self._conn.execute(
+                "INSERT INTO merge_members(source_package_id, master_package_id,"
+                " merge_id, merged_at) VALUES(?,?,?,?)",
+                (source_id, merge.master_package_id, merge.merge_id, merge.created_at),
+            )
+
+    def _row_to_merge(self, row: sqlite3.Row) -> CaseMerge:
+        return CaseMerge(
+            merge_id=row["merge_id"],
+            master_package_id=row["master_package_id"],
+            institution_id=row["institution_id"],
+            source_package_ids=tuple(json.loads(row["source_ids_json"])),
+            source_key=row["source_key"],
+            note=row["note"],
+            created_by=row["created_by"],
+            created_at=row["created_at"],
+        )
+
+    def get_merge_by_key(self, source_key: str) -> CaseMerge | None:
+        row = self._conn.execute(
+            "SELECT * FROM case_merges WHERE source_key = ?", (source_key,)
+        ).fetchone()
+        return None if row is None else self._row_to_merge(row)
+
+    def get_merge_by_master(self, master_package_id: str) -> CaseMerge | None:
+        row = self._conn.execute(
+            "SELECT * FROM case_merges WHERE master_package_id = ?",
+            (master_package_id,),
+        ).fetchone()
+        return None if row is None else self._row_to_merge(row)
+
+    def get_merge(self, merge_id: str) -> CaseMerge | None:
+        row = self._conn.execute(
+            "SELECT * FROM case_merges WHERE merge_id = ?", (merge_id,)
+        ).fetchone()
+        return None if row is None else self._row_to_merge(row)
+
+    def list_merges(
+        self, institution_id: str | None = None
+    ) -> list[CaseMerge]:
+        if institution_id is None:
+            rows = self._conn.execute(
+                "SELECT * FROM case_merges ORDER BY created_at, merge_id"
+            ).fetchall()
+        else:
+            rows = self._conn.execute(
+                "SELECT * FROM case_merges WHERE institution_id = ?"
+                " ORDER BY created_at, merge_id",
+                (institution_id,),
+            ).fetchall()
+        return [self._row_to_merge(r) for r in rows]
+
+    def resolve_package_id(self, package_id: str) -> str:
+        row = self._conn.execute(
+            "SELECT master_package_id FROM merge_members WHERE source_package_id = ?",
+            (package_id,),
+        ).fetchone()
+        return row["master_package_id"] if row is not None else package_id
+
+    def get_package_effective(self, package_id: str) -> ReviewPackage | None:
+        return self.get_package(self.resolve_package_id(package_id))
+
+    def list_merge_members(self, master_package_id: str) -> list[ReviewPackage]:
+        rows = self._conn.execute(
+            "SELECT source_package_id FROM merge_members"
+            " WHERE master_package_id = ? ORDER BY source_package_id",
+            (master_package_id,),
+        ).fetchall()
+        members = []
+        for row in rows:
+            package = self.get_package(row["source_package_id"])
+            if package is not None:
+                members.append(package)
+        return members
+
+    def mark_packages_merged(
+        self, master_package_id: str, source_ids: list[str]
+    ) -> None:
+        for source_id in source_ids:
+            self._conn.execute(
+                "UPDATE packages SET status = ? WHERE package_id = ?",
+                (PackageStatus.MERGED.value, source_id),
+            )
 
     # --------------------------------------------------------------- requests
     def insert_request(self, request: ReviewRequest) -> None:

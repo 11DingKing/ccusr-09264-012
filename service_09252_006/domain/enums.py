@@ -29,6 +29,7 @@ class PackageStatus(str, Enum):
     SEALED = "sealed"              # 已封存，清单指纹固定
     UNDER_REVIEW = "under_review"  # 已分配评审
     DECIDED = "decided"            # 结论已签发，不可再改
+    MERGED = "merged"              # 已并入复核案件合并主案（原案保留，只读）
     # 后补材料永远进入新的复审包，旧包不复活
 
 

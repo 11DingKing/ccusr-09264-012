@@ -112,5 +112,52 @@ class ConcurrencyTests(unittest.TestCase):
         self.assertEqual(pkg.decision, outcomes[0])
 
 
+class ConcurrentMergeTests(unittest.TestCase):
+    """并发重复合并：source_key 唯一约束 + 串行事务下只生成一个主案。"""
+
+    def setUp(self) -> None:
+        self.h = Harness()
+        self.admin = self.h.user("admin-a", Role.INSTITUTION_ADMIN)
+        self.case1 = seal_new_package(self.h, self.admin, title="案件一")
+        self.case2 = seal_new_package(self.h, self.admin, title="案件二")
+
+    def tearDown(self) -> None:
+        self.h.close()
+
+    def test_concurrent_duplicate_merges_create_single_master(self) -> None:
+        masters: list[str] = []
+        errors: list[Exception] = []
+        lock = threading.Lock()
+
+        def merge() -> None:
+            ctx = ApplicationContext(
+                self.h.db_path, clock=SystemClock(), ids=Uuid4IdGenerator()
+            )
+            try:
+                admin = ctx.repo.get_user("admin-a")
+                result = ctx.merges.merge_cases(
+                    admin,
+                    source_package_ids=[
+                        self.case1.package_id, self.case2.package_id
+                    ],
+                )
+                with lock:
+                    masters.append(result["master_package_id"])
+            except Exception as exc:  # noqa: BLE001
+                with lock:
+                    errors.append(exc)
+            finally:
+                ctx.close()
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
+            list(pool.map(lambda _: merge(), range(4)))
+
+        self.assertEqual(errors, [])
+        # 全部请求落到同一个主案，合并记录只有一条
+        self.assertEqual(len(set(masters)), 1)
+        self.assertEqual(len(self.h.repo.list_merges()), 1)
+        self.assertEqual(len(self.h.repo.list_packages("inst-a")), 3)
+
+
 if __name__ == "__main__":
     unittest.main()
